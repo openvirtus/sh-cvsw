@@ -1,0 +1,165 @@
+#!/bin/sh -e
+##:
+#h: Usage: rb-clone-cvs-ssh [-R CVS_SSH_SRCROOT] { -V | ... }
+#h:
+#h: Program for managing a CVS repository in a SSH server.
+#h:
+#h: ... new [MODULE]      : Create new module with "README.md".
+#h: ... ls                : List modules in CVSROOT.
+#h: ... clone [MODULE]    : Clone remote module to CVS_SSH_SRCROOT.
+#h: ... rm [MODULES...]   : Remove modules.
+#h:
+#h: Environment variables: CVS_SSH_{CVSROOT,SRCROOT}
+##:
+cvs_ssh() {
+    local OPTIND=1 optopt cmd
+
+    # Parse command line arguments.
+    while getopts "R:" optopt; do
+        case $optopt in
+            R)  CVS_SSH_SRCROOT="${OPTARG}";;
+            \?) return 1;;
+        esac
+    done
+    shift $(( $OPTIND - 1 ))
+    if test ! -n "$1"; then
+        sed -n 's/^ *#h: \{0,1\}//p' "$0"
+        return 0
+    fi
+
+    # Check environment.
+    export CVSROOT="${CVS_SSH_CVSROOT}"
+    case "${CVSROOT}" in
+        '')       echo "error: Please set CVS_SSH_CVSROOT." >&2; return 1;;
+        :ext:*:*) export CVS_RSH=ssh;;
+        /*)       unset  CVS_RSH;;
+        *)        echo "error: Invalid CVS_SSH_CVSROOT." >&2; return 1;;
+    esac
+    
+    # Operations.
+    cmd="$1"
+    shift
+    case "${cmd}" in
+        new)   cvs_ssh_new   "$@" ;;
+        ls)    cvs_ssh_ls    "$@" ;;
+        clone) cvs_ssh_clone "$@" ;;
+        rm)    cvs_ssh_rm    "$@" ;;
+        *)     echo "error: Invalid argument: ${cmd}" >&2; return 1;;
+    esac
+
+    #
+    return 0
+}
+cvs_ssh_show_variables() {
+    cat <<-EOF
+	SRCROOT             : ${SRCROOT}
+	CVS_SSH_CVSROOT     : ${CVS_SSH_CVSROOT}
+	CVS_SSH_SRCROOT     : ${CVS_SSH_SRCROOT}
+	EOF
+}
+cvs_ssh_calc_variables() {
+    SRCROOT="${SRCROOT:-/src}"
+    CVS_SSH_SRCROOT="${CVS_SSH_SRCROOT:-${SRCROOT}/cvs}"
+}
+# --------------------------------------------------------------------
+cvs_ssh_new() {
+    local pwd="$(pwd)" rpath tmp
+    if test ! -n "${1}"; then
+        cvs_ssh_ls >&2
+        echo >&2
+        echo >&2 "error: Please specify a new remote path."
+        return 1
+    fi
+    cvs_ssh_run "
+        rpath='${1}'
+        "'
+        test -e CVSROOT || cvs -d "$(pwd)"
+        if test -e "${rpath}"; then
+            echo "error: ${rpath}: The project already exists." >&2
+            exit 1
+        fi
+    '
+    rpath="${1}" tmp="$(mktemp -d)"
+    cd "${tmp}"
+    cvs checkout -l .
+    mkdir -p "${rpath}"
+    for n in $(echo "${rpath}" | tr '/' ' '); do
+        cvs add "${n}" 2>/dev/null || true
+        cd "${n}"
+    done
+    cd "${tmp}"
+    touch "${rpath}/README.md"
+    cvs add "${rpath}/README.md"
+    cvs commit -m "Create '${rpath}' module."
+    cd "${pwd}"
+    rm -rf "${tmp}"
+}
+cvs_ssh_ls() {
+    cvs_ssh_run '
+        dirs="$(ls | sed "/CVSROOT/d")"
+        find ${dirs:-.} -name "README.md,v" -exec "dirname" "{}" ";"
+    '
+}
+cvs_ssh_clone() {
+    local pwd="$(pwd)" rpath
+    if test ! -n "${1}"; then
+        cvs_ssh_ls >&2
+        echo >&2
+        echo >&2 "error: Please specify a new remote path."
+        return 1
+    fi
+    rpath="$1"
+    mkdir -p "${CVS_SSH_SRCROOT}"
+    echo "Entering ${CVS_SSH_SRCROOT} ..."
+    cd "${CVS_SSH_SRCROOT}"
+    cvs checkout -r HEAD "${rpath}"
+    cd "${rpath}"
+    cvs update -A
+    echo "Leaving $(pwd) ..."
+    cd "${pwd}"
+}
+cvs_ssh_rm() {
+    if test ! -n "$1"; then
+        cvs_ssh_ls >&2
+        echo >&2
+        echo >&2 "error: Please specify a new remote path."
+        return 1
+    fi
+    cvs_ssh_run "rm -rfv $*"
+}
+# --------------------------------------------------------------------
+cvs_ssh_run() { # COMMAND
+    local ssh dir cmd
+    case "${CVS_RSH}" in
+        '')  dir="${CVSROOT}" cmd='sh -ec'
+             ;;
+        ssh) read -r ssh dir <<-EOF; test -n "${ssh}" && test -n "${dir}"
+		$(echo "${CVSROOT}" | sed 's|^:ext:\([^:]*\):\(.*\)|\1 \2|p')
+		EOF
+             cmd="ssh ${ssh}"
+             ;;
+        *)
+             echo "error: Unsupported CVSROOT." >&2
+             return 1
+             ;;
+    esac
+    ${cmd} "
+        if test ! -d '${dir}'; then
+            echo 'error: ${ssh}${ssh:+:}${dir}: Directory not found' >&2
+            echo '       Create an empty directory to proceed.'      >&2
+            exit 1
+        fi
+        cd '${dir}'
+        $*
+    "
+}
+# --------------------------------------------------------------------
+cvs_ssh_calc_variables
+if test @"${SCRNAME:-$(basename "$0")}" = @"rb-clone-cvs-ssh"; then
+    export MSYS_NO_PATHCONV=1
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        -V)  cvs_ssh_show_variables; exit 0;;
+        *)   cvs_ssh "$@"; exit 0;;
+    esac
+fi

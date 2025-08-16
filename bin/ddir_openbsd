@@ -1,0 +1,97 @@
+#!/bin/sh -e
+##:
+#h: Usage: ddir_openbsd { -V | ... }
+#h:
+#h: Get latest OpenBSD version and sources.
+#h:
+#h: ... http URL OUT    : Download file using ftp/wget.
+#h: ... version         : Get latest OpenBSD version.
+#h: ... tar NAME        : Download sources tar.
+#h:
+#h: Environment variables: OPENBSD_{URL,MIRROR}
+##:
+##: :SKIP:
+##:
+ddir_openbsd() {
+    local cmd="$1"
+    shift
+    case "${cmd}" in
+        http)       ddir_openbsd_http "$@" ;;
+        version)    ddir_openbsd_version ;;
+        tar)        ddir_openbsd_tar "$@" ;;
+        *) echo "error: Invalid argument: ${cmd}" >&2; return 1;;
+    esac
+}
+ddir_openbsd_show_variables() {
+    cat <<-EOF
+	OPENBSD_URL     : ${OPENBSD_URL}
+	OPENBSD_MIRROR  : ${OPENBSD_MIRROR}
+	EOF
+}
+ddir_openbsd_calc_variables() {
+    OPENBSD_URL="${OPENBSD_URL:-https://www.openbsd.org}"
+    OPENBSD_MIRROR="${OPENBSD_MIRROR:-https://ftp.fr.openbsd.org/pub/OpenBSD}"
+}
+# --------------------------------------------------------------------
+ddir_openbsd_tar() {
+    local version tar url
+    case "$1" in
+        '')
+            echo "Usage: ddir_openbsd tar { src | sys | ports | xenocara }"
+            return 1
+            ;;
+        src|sys|ports|xenocara)
+            tar="${TEMP:-/tmp}/$(whoami)_${1}.tar.gz"
+            if test ! -f "${tar}"; then
+                url="${OPENBSD_MIRROR}/$(ddir_openbsd_version)/${1}.tar.gz"
+                echo "== Downloading ${url} ..." >&2
+                ddir_openbsd_http "${url}" "${tar}"
+            fi
+            echo "${tar}"
+            ;;
+        *)
+            echo "error: Invalid argument: ${1}" >&2
+            return 1
+            ;;
+    esac
+}
+ddir_openbsd_version() {
+    local faq url sed
+    faq="$(mktemp)"
+    ddir_openbsd_http 'https://www.openbsd.org/faq/faq4.html' "${faq}"
+    url='https://.*/pub/OpenBSD/\([0-9\.]*\).*/amd64/install[0-9]*.img'
+    sed="s|.*href=\"${url}\".*|\\1|p"
+    sed -n "${sed}" "${faq}"
+}
+# --------------------------------------------------------------------
+ddir_openbsd_http() {
+    local url="$1" out="$2"
+    if test ! -n "${url}"; then
+        echo "error: Please specify an URL." >&2
+        return 1
+    elif test ! -n "${out}"; then
+        echo "error: Please specify an output file." >&2
+        return 1
+    fi
+    if which wget >/dev/null 2>&1; then
+        wget -q -O "${out}.tmp" "${url}" >&2
+    elif which curl >/dev/null 2>&1; then
+        curl -s -o "${out}.tmp" "${url}" >&2
+    elif which ftp >/dev/null 2>&1; then
+        ftp -o "${out}.tmp" "${url}" >&2
+    else
+        echo "error: Please install wget or curl." >&2
+        return 1
+    fi
+    mv "${out}.tmp" "${out}" >&2
+}
+# --------------------------------------------------------------------
+ddir_openbsd_calc_variables
+if test @"${SCRNAME:-$(basename "$0")}" = @"ddir_openbsd"; then
+    export MSYS_NO_PATHCONV=1
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        -V)  ddir_openbsd_show_variables; exit 0;;
+        *)   ddir_openbsd "$@"; exit 0;;
+    esac
+fi

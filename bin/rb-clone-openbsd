@@ -1,0 +1,98 @@
+#!/bin/sh -e
+##:
+#h: Usage: rb-clone-openbsd { -V | download }
+#h:
+#h: Manage the CVS mononorepo of OpenBSD in "/usr" or "/src/OpenBSD".
+#h:
+#h: Env: OPENBSD_{CVSROOT,SRCROOT}
+##:
+##: :SKIP:
+##:
+. ddir_openbsd
+rb_clone_openbsd() {
+    local cmd="$1"
+    shift
+    case "${cmd}" in
+        download)  rb_clone_openbsd_download ;;
+        *) echo >&2 "error: Invalid argument: ${cmd}"; return 1;;
+    esac
+}
+rb_clone_openbsd_show_variables() {
+    cat <<-EOF
+	SRCROOT         : ${SRCROOT}
+	OPENBSD_CVSROOT : ${OPENBSD_CVSROOT}
+	OPENBSD_SRCROOT : ${OPENBSD_SRCROOT}
+	EOF
+    ddir_openbsd_show_variables
+}
+rb_clone_openbsd_calc_variables() {
+    SRCROOT="${SRCROOT:-/src}"
+    OPENBSD_CVSROOT="${OPENBSD_CVSROOT:-anoncvs@anoncvs.eu.openbsd.org:/cvs}"
+    case "$(uname -s)" in
+        OpenBSD) OPENBSD_SRCROOT="${OPENBSD_SRCROOT:-}" ;;
+        Linux)   OPENBSD_SRCROOT="${OPENBSD_SRCROOT:-${SRCROOT}/OpenBSD}" ;;
+        *)       echo "error: Unsupported platform: $(uname -s)" >&2; return 1;;   
+    esac
+    export CVSROOT="${OPENBSD_CVSROOT}"
+}
+# --------------------------------------------------------------------
+rb_clone_openbsd_download() {
+    local pwd="$(pwd)" cvs
+    
+    local d_src="${OPENBSD_SRCROOT}/usr/src"
+    local d_sys="${OPENBSD_SRCROOT}/usr/src"
+    local d_ports="${OPENBSD_SRCROOT}/usr"
+    local d_xenocara="${OPENBSD_SRCROOT}/usr/xenocara"
+    
+    local f_src="${d_src}/bin/cat/cat.c"
+    local f_sys="${d_sys}/sys/arch/amd64/amd64/mem.c"
+    local f_ports="${d_ports}/ports/archivers/bzip2/Makefile"
+    local f_xenocara="${d_xenocara}/app/appres/appres.c"
+
+    case "$(uname -s)" in
+        OpenBSD)
+            if test ! -e /bin/sh; then
+                echo "error: For downloading use root." >&2
+                return 1
+            fi
+            user mod -G wsrc "$(whoami)"
+            ;;
+    esac
+
+    echo "== Downloading tars ..."
+    
+    test -f "${f_src}"      || ddir_openbsd tar src       >/dev/null
+    test -f "${f_sys}"      || ddir_openbsd tar sys       >/dev/null
+    test -f "${f_ports}"    || ddir_openbsd tar ports     >/dev/null
+    test -f "${f_xenocara}" || ddir_openbsd tar xenocara  >/dev/null
+
+    echo "== Extracting tars ..."
+    
+    mkdir -p "${d_src}" "${d_sys}" "${d_ports}" "${d_xenocara}"
+    
+    test -f "${f_src}"      || tar xzf "$(ddir_openbsd tar src)"      -C "${d_src}"
+    test -f "${f_sys}"      || tar xzf "$(ddir_openbsd tar sys)"      -C "${d_sys}"
+    test -f "${f_ports}"    || tar xzf "$(ddir_openbsd tar ports)"    -C "${d_ports}"
+    test -f "${f_xenocara}" || tar xzf "$(ddir_openbsd tar xenocara)" -C "${d_xenocara}"
+    
+    case "$(uname -s)" in
+        OpenBSD)
+            echo "== Changing permissions ..."
+            chmod -R g+w "${d_src}" "${d_sys}" "${d_ports}" "${d_xenocara}"
+            ;;
+    esac
+
+    echo "== Changing cvsroot ..."
+    find "${d_src}" "${d_ports}" "${d_xenocara}" -type d -name CVS | while read -r cvs; do
+        echo "${OPENBSD_CVSROOT}" > "${cvs}/Root"
+    done
+}
+# --------------------------------------------------------------------
+rb_clone_openbsd_calc_variables
+if test @"${SCRNAME:-$(basename "$0")}" = @"rb-clone-openbsd"; then
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        -V)  rb_clone_openbsd_show_variables; exit 0;;
+        *)   rb_clone_openbsd "$@"; exit 0;;
+    esac
+fi

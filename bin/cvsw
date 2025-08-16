@@ -1,0 +1,352 @@
+#!/bin/sh -e
+##:
+#h: Usage: cvsw ...
+#h:
+#h: A wrapper around cvs(1) for easier management.
+#h:
+#h: ... update                     :      Pull changes.
+#h: ... rtag-update TAG            :      Create new branch tag.
+#h: ...  tag-update TAG            :      Create new tag.
+#h: ... add [FILES...]             : [a]  Add files to CVS.
+#h: ... commit MESSAGE             : [c]  Commit changes. (git commit/push)
+#h: ... status-tags                : [st] List tags. (cvs status)
+#h: ... status-branches            : [sb] List sticky tags. (cvs status)
+#h: ... diff [TAG_START] [TAG_END] :      Create a diff.
+#h: ... checkout [TAG]             :      Checkout a tag.
+#h: ... update-merge [TAG]         : [m]  Merge tag in current (add/commit later)
+#h: ... apply PATCHES...           :      Apply patches.
+#h: ... tkrev [install]            :      Install/execute "tkrev" GUI.
+#h:
+#h: All subcommands support "--help" describing exactly what they do.
+#h:
+#h: Environment variables: CVSROOT
+##:
+##: :TOP:
+##:
+cvsw() {
+    local cmd="$1"
+    shift
+    case "${cmd}" in
+        help)               cvsw_help               "$@" ;;
+        update|u)           cvsw_update             "$@" ;;
+        status|s)           cvsw_status             "$@" ;;
+        rtag-update)        cvsw_rtag_update        "$@" ;;
+        tag-update)         cvsw_tag_update         "$@" ;;
+        add|a)              cvsw_add                "$@" ;;
+        commit|c)           cvsw_commit             "$@" ;;
+        status-tags|st)     cvsw_status_tags        "$@" ;;
+        status-branches|sb) cvsw_status_tags_sticky "$@" ;;
+        diff)               cvsw_diff               "$@" ;;
+        checkout)           cvsw_checkout           "$@" ;;
+        update-merge|m)     cvsw_update_merge       "$@" ;;
+        apply)              cvsw_apply              "$@" ;;
+        tkrev)              cvsw_tkrev              "$@" ;;
+        *) echo "error: Invalid argument: ${cmd}" >&2; return 1;;
+    esac
+}
+# --------------------------------------------------------------------
+cvsw_update() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw update
+	
+	Download latest changes recursively with 'cvs update -dP'.
+	
+	1. "-d" : Create directories.
+	2. "-P" : Prune empty directories.
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    cvs update -dP
+}
+cvsw_status() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw status
+	
+	View the status of the working directory (like "git status") by
+	executing "cvs -n update" and "cvs status -v".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    cvs -n update
+    cvs status -v
+}
+cvsw_rtag_update() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw rtag-update
+	
+	Create a branch tag with "cvs rtag -b TAG MODULE" and then
+	checkout that branch, the same way "git checkout -b".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    local tag="${1}" modules
+    cvsw_valid_tag "${tag}"
+    read -r module < CVS/Repository
+    test -n "${module}"
+    cvs rtag -b "${tag}" "${module}"
+    cvs update -r "${tag}"
+}
+cvsw_tag_update() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw rtag-update
+	
+	Create a tag with "cvs tag -b TAG MODULE". This is necessary
+	for checking out the current state later.
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    local tag="${1}" modules
+    cvsw_valid_tag "${tag}"
+    read -r module < CVS/Repository
+    test -n "${module}"
+    cvs tag -b  "${tag}" "${module}"
+    cvs update -r "${tag}"
+}
+cvsw_add() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw add FILES... DIRS...
+	
+	Queue files for being added in the next commit.
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    if test ! -n "$1"; then
+        cvs -n update >&2
+        echo "error: Please select some '?' files." >&2
+        return 1
+    fi
+    cvs add "$@"
+}
+cvsw_commit() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw commit MESSAGE...
+	
+	Make a CVS commit, same as "git commit + push".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    if test ! -n "${1}"; then
+        cvs status >&2
+        echo >&2 "error: Please specify the commit message."
+        return 1
+    fi
+    cvs commit -m "${*}"
+}
+cvsw_status_tags() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw status-tags
+	
+	List existing tags with "cvs status -v".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    local w1= w2= status=out
+    cvs status -v 2>/dev/null | \
+    while read -r w1 w2 ign; do
+        case "${w1}_${w2}@${status}" in
+            Existing_Tags:@out) status="in" ;;
+            _@in)               status="out";;
+            *@in)               echo "${w1}";;
+        esac
+    done | sort -u
+    echo "HEAD"
+}
+cvsw_status_tags_sticky() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw status-tags-sticky
+	
+	List existing sticky tags with "cvs status -v".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    cvs status -v 2>/dev/null | sed -n '
+        s|^[	 ]*Sticky Tag:[	 ]*\([^ ][^ ]*\) .*|\1|p
+    ' | sort -u
+}
+cvsw_diff() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw diff START_TAG END_TAG
+	
+	Print the diff that applied in START gives END.
+	
+	Calls "cvs diff -uc -r END -r START -lRNu".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    local start="$1" end="$2"
+    if test ! -n "${start}" || test ! -n "${end}"; then
+        cvsw_status_tags        | sed 's|^|Sticky : |' >&2
+        cvsw_status_tags_sticky | sed 's|^|Tags   : |' >&2
+        echo >&2
+        if test ! -n "${start}${end}"; then
+            echo "error: Please specify a <from> and <to> tags." >&2
+        elif test ! -n "${start}"; then
+            echo "error: Please specify a <start> tag." >&2
+        elif test ! -n "${end}"; then
+            echo "error: Please specify a <end> tag." >&2
+        fi
+        return 1
+    fi
+    cvs diff -uc -r "${end}" -r "${start}" -lRNu
+}
+cvsw_checkout() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw checkout TAG
+	
+	Checkout a TAG in module with "cvs checkout -r TAG".
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    local tag="$1" pwd="$(pwd)" cvsroot module ndir
+    if test ! -n "${tag}"; then
+        cvsw_status_tags >&2
+        echo >&2
+        echo "error: Please specify a tag to checkout." >&2
+        return 1
+    fi
+    shift
+    cvsroot="$(cat CVS/Root)" module="$(cat CVS/Repository)"
+    test -n "${cvsroot}" && test -n "${module}"
+    ndir="$(echo "${module}" | sed 's|[^/][^/]*|..|g')"
+    cd "${ndir}"
+    env CVSROOT="${cvsroot}" cvs checkout -r "${tag}" "${module}"
+    cd "${pwd}"
+}
+cvsw_update_merge() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw update-merge TAG
+	
+	Apply the differences of TAG in current working directory.
+	
+	Calls: cvs update -RPCd -j TAG
+	EOF
+        return 0
+    fi
+    cvsw_in_repo
+    local tag="$1"
+    if test ! -n "${tag}"; then
+        cvsw_status_tags >&2
+        echo >&2
+        echo "error: Please specify a tag to merge." >&2
+        return 1
+    fi
+    shift
+    cvs update -RPCdA -j "${tag}"
+}
+cvsw_apply() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw apply PATCHES...
+	
+	Apply patches with "patch -p0".
+	EOF
+        return 0
+    fi
+    local f
+    for f in "$@"; do
+        patch -p0 < "$f"
+    done
+}
+# --------------------------------------------------------------------
+cvsw_tkrev() {
+    if test @"$1" = @"--help"; then
+        cat <<-EOF
+	Usage: cvsw tkrev [install]
+	
+	Open module with tkrev(1) GUI. With "install" the program is downloaded
+	from sourceforge.net and installed in "/usr/local".
+	EOF
+    elif test @"$1" = @"install"; then
+        local url='https://sourceforge.net/projects/tkcvs/files/tkrev_9.6.1.tar.gz'
+        local tmp="${DDIR:-${TEMP:-/tmp}/$(whoami)}"
+        local tar="${tmp}/$(basename "${url}")"
+        local dir="${tar%.tar.gz}"
+        local pwd="$(pwd)" sudo
+        if test ! -e /usr/local/bin/tkrev; then
+            if test ! -e "${dir}/doinstall.tcl"; then
+                if test ! -f "${tar}"; then
+                    mkdir -p "${tmp}"
+                    if which wget >/dev/null 2>&1; then
+                        ${VAULT} wget -q -O "${tar}.tmp" "${url}" >&2
+                    elif which curl >/dev/null 2>&1; then
+                        ${VAULT} curl -s -o "${tar}.tmp" "${url}" >&2
+                    elif which ftp >/dev/null 2>&1; then
+                        ftp -o "${tar}.tmp" "${url}" >&2
+                    else
+                        echo "error: Please install wget or curl." >&2
+                        return 1
+                    fi
+                    mv "${tar}.tmp" "${tar}" >&2
+                fi
+                tar xf "${tar}" -C "${tmp}"
+            fi
+            if test -w /usr/local/bin; then
+                sudo=
+            elif which doas >/dev/null 2>&1; then
+                sudo=doas
+            elif which sudo >/dev/null 2>&1; then
+                sudo=sudo
+            else
+                echo "error: Can't elevate with doas/sudo." >&2
+                return 1
+            fi
+            echo "== Installing tkrev ..."
+            cd "${dir}"
+            ${sudo} tclsh doinstall.tcl -nox /usr/local        
+            cd "${pwd}"
+        fi
+    elif ! which tkrev >/dev/null 2>&1; then
+        echo "error: Please install tkrev." >&2
+        return 1
+    else
+        cvsw_in_repo
+        tkrev "$@"
+    fi
+}
+# --------------------------------------------------------------------
+cvsw_valid_tag() {
+    if test ! -n "$1"; then
+        echo "error: Please specify a tag name." >&2
+        return 1
+    fi
+    if test ! -n "$(echo "${1}" | sed -n '/^[A-Z][A-Z0-9_]*$/p')"; then
+        echo "error: $1: Invalid tag format, ie BRANCH_0_1." >&2
+        return 1
+    fi
+    return 0
+}
+cvsw_in_repo() {
+    if test ! -d CVS; then
+        echo "error: Not in a CVS repository." >&2
+        return 1
+    fi
+}
+# --------------------------------------------------------------------
+if test @"${SCRNAME:-$(basename "$0")}" = @"cvsw"; then
+    export MSYS_NO_PATHCONV=1
+    case "${1}" in
+        ''|-h|--help) sed -n 's/^ *#h: \{0,1\}//p' "$0";;
+        *)            cvsw "$@"; exit 0;;
+    esac
+fi
