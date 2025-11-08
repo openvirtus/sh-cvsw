@@ -20,8 +20,9 @@ install-license: README.md COPYING
 install: install-sh
 install-sh:
 	install -d $(DESTDIR)$(PREFIX)/bin
+	install -c -m 755 bin/ddir_openbsd $(DESTDIR)$(PREFIX)/bin
 	install -c -m 755 bin/rb-clone-cvs-ssh $(DESTDIR)$(PREFIX)/bin
 	install -c -m 755 bin/cvsw $(DESTDIR)$(PREFIX)/bin
 	install -c -m 755 bin/rb-clone-openbsd $(DESTDIR)$(PREFIX)/bin
-	install -c -m 755 bin/ddir_openbsd $(DESTDIR)$(PREFIX)/bin
+	install -c -m 755 bin/cvs-ssh $(DESTDIR)$(PREFIX)/bin
 ## -- BLOCK:sh --

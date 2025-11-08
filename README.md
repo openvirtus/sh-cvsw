@@ -24,10 +24,22 @@ cvsw
     ... apply PATCHES...           :      Apply patches.
     ... tkrev [install]            :      Install/execute "tkrev" GUI.
     
-    All subcommands supports "--help" describing exactly what and how
-    they perform the operation.
+    All subcommands support "--help" describing exactly what they do.
     
     Environment variables: CVSROOT
+
+cvs-ssh
+
+    Usage: cvs-ssh [-R CVS_SSH_SRCROOT] { -V | ... }
+    
+    Program for managing a CVS repository in a SSH server.
+    
+    ... new [MODULE]      : Create new module with "README.md".
+    ... ls                : List modules in CVSROOT.
+    ... clone [MODULE]    : Clone remote module to CVS_SSH_SRCROOT.
+    ... rm [MODULES...]   : Remove modules.
+    
+    Environment variables: CVS_SSH_{CVSROOT,SRCROOT}
 
 rb-clone-cvs-ssh
 
